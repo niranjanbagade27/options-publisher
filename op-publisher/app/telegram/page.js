@@ -73,7 +73,7 @@ export default function TelegramPage() {
                 <div className="flex gap-3 border-b mb-4">
                     {[
                         { id: "trade", label: "Fresh Trade" },
-                        { id: "squareoff-both", label: "Square Off - Both" },
+                        { id: "squareoff", label: "Square Off" },
                         { id: "expiry", label: "Expiry Trade" },
                         // { id: "loss", label: "Loss Booking" },
                         { id: "ignore", label: "Ignore Alert" },
@@ -93,7 +93,7 @@ export default function TelegramPage() {
 
                 {/* Sections */}
                 {activeTab === "trade" && <FreshTradeSection strikes={strikes} onSend={sendToTelegram} />}
-                {activeTab === "squareoff-both" && <SquareOffBothSection strikes={strikes} onSend={sendToTelegram} />}
+                {activeTab === "squareoff" && <SquareOffSection strikes={strikes} onSend={sendToTelegram} />}
                 {activeTab === "expiry" && <ExpiryTradesSection strikes={strikes} onSend={sendToTelegram} />}
                 {activeTab === "ignore" && <IgnoreAlertSection onSend={sendToTelegram} />}
             </div>
@@ -246,9 +246,8 @@ function FreshTradeSection({ strikes, onSend }) {
             if (buyStopLoss && sellStopLoss) {
                 stopLossMsg = `\n\nStop loss for ${strike} ${buyOptionType} is ${buyStopLoss} and ${strike} ${sellOptionType} is ${sellStopLoss}`
             } else if (buyStopLoss || sellStopLoss) {
-                stopLossMsg = `\n\nStop loss for ${strike} ${
-                    buyStopLoss ? buyOptionType + " is " + buyStopLoss : sellOptionType + " is " + sellStopLoss
-                }`
+                stopLossMsg = `\n\nStop loss for ${strike} ${buyStopLoss ? buyOptionType + " is " + buyStopLoss : sellOptionType + " is " + sellStopLoss
+                    }`
             }
         }
 
@@ -425,67 +424,34 @@ function FreshTradeSection({ strikes, onSend }) {
 /* ----------------------
    SquareOffSection (with flipped input order)
    ---------------------- */
-function SquareOffBothSection({ strikes, onSend }) {
+function SquareOffSection({ strikes, onSend }) {
+    const [exitMode, setExitMode] = useState("") // BUY | SELL | BOTH
     const [marketView, setMarketView] = useState("BULLISH") // BULLISH | BEARISH
     const [strike, setStrike] = useState(strikes?.[0] ?? 25900)
-    const [exitCE, setExitCE] = useState("")
-    const [exitPE, setExitPE] = useState("")
+    const [ceExit, setCeExit] = useState("")
+    const [peExit, setPeExit] = useState("")
+    const [singleExit, setSingleExit] = useState("")
+    const [selectedOption, setSelectedOption] = useState("") // CE or PE for single exit
     const [action, setAction] = useState("book100")
     const [preview, setPreview] = useState("")
 
-    // Action templates mapped to text
     const squareOffTemplates = {
-        book100:
-            "Modify stop loss and book 100% profit.",
-        book50:
-            "Modify stop loss and book 50% profit and now keep trailing stop loss at cost for remaining 50% qty.",
-        trailprofit:
-            "Trailing stop loss triggered. Modify stop loss and book profit for remaining 50% quantity.",
-        trailclose:
-            "Trailing stop loss triggered. Square off position.",
-        stoploss:
-            "Stop loss triggered. Modify your stop loss and square off position.",
-    }
-
-    const buildMessage = () => {
-        if (!exitCE || !exitPE) {
-            toast.error("Enter both CE and PE exit prices.")
-            return null
-        }
-
-        const actionText = squareOffTemplates[action]
-        if (!actionText) {
-            toast.error("Select valid action type.")
-            return null
-        }
-
-        // Determine order based on market view
-        let sellLeg, buyLeg
-        if (marketView === "BULLISH") {
-            sellLeg = `Sell ${strike} CE @ ${exitCE}`
-            buyLeg = `Buy ${strike} PE @ ${exitPE}`
-        } else {
-            sellLeg = `Sell ${strike} PE @ ${exitPE}`
-            buyLeg = `Buy ${strike} CE @ ${exitCE}`
-        }
-
-        const message = `SQUARE OFF\n${actionText} ${sellLeg} and ${buyLeg}`
-
-        return message
-    }
-
-    const handlePreview = (e) => {
-        e.preventDefault()
-        const msg = buildMessage()
-        if (msg) setPreview(msg)
+        book100: "Modify stop loss and book 100% profit.",
+        book50: "Modify stop loss and book 50% profit and now keep trailing stop loss at cost for remaining 50% qty.",
+        trailprofit: "Trailing stop loss triggered. Modify stop loss and book profit for remaining 50% quantity.",
+        trailclose: "Trailing stop loss triggered. Square off position.",
+        stoploss: "Stop loss triggered. Modify your stop loss and square off position.",
     }
 
     useEffect(() => {
         const resetHandler = () => {
+            setExitMode("")
             setMarketView("BULLISH")
             setStrike(strikes?.[0] ?? 25900)
-            setExitCE("")
-            setExitPE("")
+            setCeExit("")
+            setPeExit("")
+            setSingleExit("")
+            setSelectedOption("")
             setAction("book100")
             setPreview("")
         }
@@ -493,40 +459,111 @@ function SquareOffBothSection({ strikes, onSend }) {
         return () => document.removeEventListener("reset-forms", resetHandler)
     }, [strikes])
 
+    const buildMessage = () => {
+        const actionText = squareOffTemplates[action]
+        if (!actionText) {
+            toast.error("Select valid action type.")
+            return null
+        }
+
+        let msg = ""
+
+        // Exit from Buy (Sell to close)
+        if (exitMode === "BUY") {
+            if (!selectedOption) {
+                toast.error("Select CE or PE to exit from Buy position.")
+                return null
+            }
+            if (!singleExit) {
+                toast.error("Enter exit price.")
+                return null
+            }
+            msg = `SQUARE OFF\n${actionText} Sell ${strike} ${selectedOption} @ ${singleExit}`
+        }
+
+        // Exit from Sell (Buy to close)
+        if (exitMode === "SELL") {
+            if (!selectedOption) {
+                toast.error("Select CE or PE to exit from Sell position.")
+                return null
+            }
+            if (!singleExit) {
+                toast.error("Enter exit price.")
+                return null
+            }
+            msg = `SQUARE OFF\n${actionText} Buy ${strike} ${selectedOption} @ ${singleExit}`
+        }
+
+        // Exit from Both
+        if (exitMode === "BOTH") {
+            if (!ceExit || !peExit) {
+                toast.error("Enter both CE and PE exit prices.")
+                return null
+            }
+
+            if (marketView === "BULLISH") {
+                // Bullish = originally Buy CE, Sell PE → to close: Sell CE, Buy PE
+                msg = `SQUARE OFF\n${actionText} Sell ${strike} CE @ ${ceExit} and Buy ${strike} PE @ ${peExit}`
+            } else {
+                // Bearish = originally Buy PE, Sell CE → to close: Sell PE, Buy CE
+                msg = `SQUARE OFF\n${actionText} Sell ${strike} PE @ ${peExit} and Buy ${strike} CE @ ${ceExit}`
+            }
+        }
+
+        return msg
+    }
+
+    const handlePreview = (e) => {
+        e.preventDefault()
+        const message = buildMessage()
+        if (message) setPreview(message)
+    }
+
     return (
         <form onSubmit={handlePreview} className="bg-white rounded-2xl shadow p-8">
             <h1 className="text-2xl font-bold mb-6">Square Off</h1>
 
-            {/* Market View */}
-            <div className="mb-4">
-                <label className="block font-semibold mb-2">Market View</label>
+            {/* Step 1: Exit Mode */}
+            <div className="mb-6">
+                <label className="block font-semibold mb-2">Select Exit Mode</label>
                 <div className="flex gap-6">
                     <label>
                         <input
                             type="radio"
-                            name="marketView"
-                            value="BULLISH"
-                            checked={marketView === "BULLISH"}
-                            onChange={() => setMarketView("BULLISH")}
+                            name="exitMode"
+                            value="BUY"
+                            checked={exitMode === "BUY"}
+                            onChange={() => setExitMode("BUY")}
                             className="accent-blue-600"
                         />{" "}
-                        Bullish (Buy CE & Sell PE)
+                        Exit from Buy
                     </label>
                     <label>
                         <input
                             type="radio"
-                            name="marketView"
-                            value="BEARISH"
-                            checked={marketView === "BEARISH"}
-                            onChange={() => setMarketView("BEARISH")}
+                            name="exitMode"
+                            value="SELL"
+                            checked={exitMode === "SELL"}
+                            onChange={() => setExitMode("SELL")}
                             className="accent-blue-600"
                         />{" "}
-                        Bearish (Buy PE & Sell CE)
+                        Exit from Sell
+                    </label>
+                    <label>
+                        <input
+                            type="radio"
+                            name="exitMode"
+                            value="BOTH"
+                            checked={exitMode === "BOTH"}
+                            onChange={() => setExitMode("BOTH")}
+                            className="accent-blue-600"
+                        />{" "}
+                        Exit from Both
                     </label>
                 </div>
             </div>
 
-            {/* Strike */}
+            {/* Step 2: Strike Selection (always visible) */}
             <div className="mb-4">
                 <label className="block font-semibold mb-2">Strike Price</label>
                 <select
@@ -542,83 +579,144 @@ function SquareOffBothSection({ strikes, onSend }) {
                 </select>
             </div>
 
-            {/* Exit Prices - order flips based on market view */}
-            <div className="grid grid-cols-2 gap-4 mb-4">
-                {marketView === "BULLISH" ? (
-                    <>
-                        <div>
-                            <label className="block font-semibold mb-1">CE Exit Price</label>
-                            <input
-                                type="number"
-                                value={exitCE}
-                                onChange={(e) => setExitCE(e.target.value)}
-                                placeholder="e.g. 120"
-                                className="w-full border rounded p-2"
-                            />
+            {/* Step 3: If Single Exit */}
+            {(exitMode === "BUY" || exitMode === "SELL") && (
+                <>
+                    <div className="mb-4">
+                        <label className="block font-semibold mb-2">Select Option Type</label>
+                        <div className="flex gap-6">
+                            <label>
+                                <input
+                                    type="radio"
+                                    name="optionType"
+                                    value="CE"
+                                    checked={selectedOption === "CE"}
+                                    onChange={() => setSelectedOption("CE")}
+                                    className="accent-blue-600"
+                                />{" "}
+                                CE
+                            </label>
+                            <label>
+                                <input
+                                    type="radio"
+                                    name="optionType"
+                                    value="PE"
+                                    checked={selectedOption === "PE"}
+                                    onChange={() => setSelectedOption("PE")}
+                                    className="accent-blue-600"
+                                />{" "}
+                                PE
+                            </label>
                         </div>
-                        <div>
-                            <label className="block font-semibold mb-1">PE Exit Price</label>
-                            <input
-                                type="number"
-                                value={exitPE}
-                                onChange={(e) => setExitPE(e.target.value)}
-                                placeholder="e.g. 125"
-                                className="w-full border rounded p-2"
-                            />
-                        </div>
-                    </>
-                ) : (
-                    <>
-                        <div>
-                            <label className="block font-semibold mb-1">PE Exit Price</label>
-                            <input
-                                type="number"
-                                value={exitPE}
-                                onChange={(e) => setExitPE(e.target.value)}
-                                placeholder="e.g. 125"
-                                className="w-full border rounded p-2"
-                            />
-                        </div>
-                        <div>
-                            <label className="block font-semibold mb-1">CE Exit Price</label>
-                            <input
-                                type="number"
-                                value={exitCE}
-                                onChange={(e) => setExitCE(e.target.value)}
-                                placeholder="e.g. 120"
-                                className="w-full border rounded p-2"
-                            />
-                        </div>
-                    </>
-                )}
-            </div>
+                    </div>
 
-            {/* Action Dropdown */}
-            <div className="mb-4">
-                <label className="block font-semibold mb-2">Action Type</label>
-                <select
-                    value={action}
-                    onChange={(e) => setAction(e.target.value)}
-                    className="w-full border rounded p-2"
+                    <Input
+                        label={`Exit Price for ${exitMode === "BUY" ? "Buy" : "Sell"} ${selectedOption || "Option"}`}
+                        value={singleExit}
+                        setValue={setSingleExit}
+                        placeholder="e.g. 120"
+                    />
+                </>
+            )}
+
+            {/* Step 4: If Both */}
+            {exitMode === "BOTH" && (
+                <>
+                    <div className="mb-4">
+                        <label className="block font-semibold mb-2">Market View</label>
+                        <div className="flex gap-6">
+                            <label>
+                                <input
+                                    type="radio"
+                                    name="marketView"
+                                    value="BULLISH"
+                                    checked={marketView === "BULLISH"}
+                                    onChange={() => setMarketView("BULLISH")}
+                                    className="accent-blue-600"
+                                />{" "}
+                                Bullish (Buy CE & Sell PE)
+                            </label>
+                            <label>
+                                <input
+                                    type="radio"
+                                    name="marketView"
+                                    value="BEARISH"
+                                    checked={marketView === "BEARISH"}
+                                    onChange={() => setMarketView("BEARISH")}
+                                    className="accent-blue-600"
+                                />{" "}
+                                Bearish (Buy PE & Sell CE)
+                            </label>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                        {marketView === "BULLISH" ? (
+                            <>
+                                <Input
+                                    label="CE Exit Price (Sell to Close)"
+                                    value={ceExit}
+                                    setValue={setCeExit}
+                                    placeholder="e.g. 120"
+                                />
+                                <Input
+                                    label="PE Exit Price (Buy to Close)"
+                                    value={peExit}
+                                    setValue={setPeExit}
+                                    placeholder="e.g. 125"
+                                />
+                            </>
+                        ) : (
+                            <>
+                                <Input
+                                    label="PE Exit Price (Sell to Close)"
+                                    value={peExit}
+                                    setValue={setPeExit}
+                                    placeholder="e.g. 125"
+                                />
+                                <Input
+                                    label="CE Exit Price (Buy to Close)"
+                                    value={ceExit}
+                                    setValue={setCeExit}
+                                    placeholder="e.g. 120"
+                                />
+                            </>
+                        )}
+                    </div>
+                </>
+            )}
+
+            {/* Step 5: Action Type */}
+            {exitMode && (
+                <div className="mb-4">
+                    <label className="block font-semibold mb-2">Action Type</label>
+                    <select
+                        value={action}
+                        onChange={(e) => setAction(e.target.value)}
+                        className="w-full border rounded p-2"
+                    >
+                        <option value="book100">Book 100% profit</option>
+                        <option value="book50">Book 50% profit</option>
+                        <option value="trailprofit">
+                            Trailing SL triggered – book remaining 50% profit
+                        </option>
+                        <option value="trailclose">
+                            Trailing SL triggered – square off position
+                        </option>
+                        <option value="stoploss">Stop loss triggered</option>
+                    </select>
+                </div>
+            )}
+
+            {/* Step 6: Preview */}
+            {exitMode && (
+                <button
+                    type="submit"
+                    className="w-full bg-blue-600 text-white py-2 rounded"
                 >
-                    <option value="book100">Book 100% profit</option>
-                    <option value="book50">Book 50% profit</option>
-                    <option value="trailprofit">
-                        Trailing SL triggered – book remaining 50% profit
-                    </option>
-                    <option value="trailclose">
-                        Trailing SL triggered – square off position
-                    </option>
-                    <option value="stoploss">Stop loss triggered</option>
-                </select>
-            </div>
-
-            <button
-                type="submit"
-                className="w-full bg-blue-600 text-white py-2 rounded"
-            >
-                Preview Message
-            </button>
+                    Preview Message
+                </button>
+            )}
 
             {preview && (
                 <div className="mt-4">
@@ -627,8 +725,9 @@ function SquareOffBothSection({ strikes, onSend }) {
                         onConfirm={() => {
                             onSend(preview)
                             setPreview("")
-                            setExitCE("")
-                            setExitPE("")
+                            setCeExit("")
+                            setPeExit("")
+                            setSingleExit("")
                         }}
                         onCancel={() => setPreview("")}
                     />
@@ -637,6 +736,7 @@ function SquareOffBothSection({ strikes, onSend }) {
         </form>
     )
 }
+
 
 /* ----------------------
    LossBookingSection (unchanged)
